@@ -1,8 +1,17 @@
 ---
 title: "Reverse Repo & GME Correlation Analysis"
 author: "u/orangecatmasterrace"
-date: "6/7/2021"
-output: html_document
+date: "`r Sys.Date()`"
+output:
+  rmdformats::downcute:
+    self_contained: yes
+    thumbnails: no
+    lightbox: yes
+    gallery: no
+    highlight: tango
+  html_document:
+    df_print: paged
+  output: null
 ---
 
 ```{r setup, message=FALSE}
@@ -12,7 +21,7 @@ library(sqldf)
 library(dplyr)
 library(stringr)
 library(ggpubr)
-library(dynlm)
+library(rmdformats)
 ```
 
 ## Guide with additional info that we'll be using: https://online.stat.psu.edu/stat510/lesson/9/9.1
