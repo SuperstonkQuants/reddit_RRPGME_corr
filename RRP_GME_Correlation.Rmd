@@ -24,6 +24,8 @@ library(ggpubr)
 library(rmdformats)
 ```
 
+## Link to the Github repo: https://github.com/SuperstonkQuants/reddit_RRPGME_corr
+
 ## Guide with additional info that we'll be using: https://online.stat.psu.edu/stat510/lesson/9/9.1
 
 ## First, pull the GME OHLC and Reverse Repo data into R.
