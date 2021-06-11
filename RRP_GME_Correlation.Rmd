@@ -1,0 +1,131 @@
+---
+title: "Reverse Repo & GME Correlation Analysis"
+author: "u/orangecatmasterrace"
+date: "6/7/2021"
+output: html_document
+---
+
+```{r setup, message=FALSE}
+#Calling Required Libraries
+library(tidyquant)
+library(sqldf)
+library(dplyr)
+library(stringr)
+library(ggpubr)
+library(dynlm)
+```
+
+First, pull the GME OHLC and Reverse Repo data into R.
+
+```{r data_import}
+#Pulling GME OHLC Data
+stock_data <- tq_get("GME",
+                   get = "stock.prices",
+                   from = "2020-01-01",
+                   to = Sys.Date()
+                   )
+
+#Loading RRP Data
+rrp_data <- read.csv("~/RStudio/rrp_data.csv")
+#Cleaning up headers
+names(rrp_data) <- str_replace_all(names(rrp_data), "[.]", "_")
+
+```
+
+Subset the Reverse Repo data down to just the records that have the actual Reverse Repo rates per day, then fix some field formats.
+
+```{r data_cleaning, warning=FALSE}
+#Subsetting RRP Data to the useful features
+rrp_data_sub <- sqldf(
+"
+select
+  Deal_Date,
+  Participating_Counterparties,
+  Total_Accept
+from rrp_data
+
+where Op_Type = 'RRP'
+"
+)
+
+#Fixing formatting
+rrp_data_sub$Deal_Date <- as.Date(rrp_data_sub$Deal_Date, "%m/%d/%Y")
+rrp_data_sub$Participating_Counterparties <- as.integer(rrp_data_sub$Participating_Counterparties)
+
+```
+
+Join the 2 sets of data together by date.
+
+```{r data_joining}
+#Joining the GME OHLC data to the RRP Data
+joined_data <- sqldf(
+"
+select *
+from rrp_data_sub r 
+
+left join stock_data s
+on r.Deal_Date = s.date
+
+where s.symbol is not null
+"
+)
+
+```
+
+Run a Shapiro-Wilk test for normality to determine if the series is normally distributed.
+
+Then, run a density chart and QQ Plot to see what the distributions look like visually.
+
+```{r tests}
+#Shapiro-Wilk normality test for RRP Total
+shapiro.test(joined_data$Total_Accept)
+#Shapiro-Wilk normality test for GME open
+shapiro.test(joined_data$open)
+
+#RRP Total Density Plot
+ggdensity(joined_data$Total_Accept, xlab = "Reverse Repo Rate")
+#GME open Density Plot
+ggdensity(joined_data$open, xlab = "GME open")
+
+#RRP Total QQ Plot
+ggqqplot(joined_data$Total_Accept, ylab = "Reverse Repo Rate")
+#GME open QQ Plot
+ggqqplot(joined_data$open, ylab = "GME open")
+```
+
+Create a scatter plot for the Reverse Repo Rate against GME Open.
+
+```{r scatter, message=FALSE}
+#Scatter plot for RRP Total and GME Open
+ggscatter(joined_data, x = "open", y = "Total_Accept", 
+          add = "reg.line", conf.int = TRUE, 
+          xlab = "GME Open", ylab = "RRP Total")
+```
+
+Use an ARIMA model on the GME Open values to determine if there is any lag of GME Price that can predict the Reverse Repo rate.
+
+```{r arima}
+#Choose which features to compare
+x <- joined_data$open
+y <- joined_data$Total_Accept
+
+#Fit ARIMA model. Note: fit doesn't actually matter much here, just removing autoregression
+ar1model = arima(x, order = c(1,1,0))
+
+#Use residuals from ARIMA model fit on x to filter y
+pwx = ar1model$residuals
+
+newpwy = stats::filter(y,
+                filter = c(1, ar1model$coef, ar1model$model$phi),
+                sides = 1)
+```
+
+Plot the Cross-Correlation between the GME Price residuals and the Reverse Repo rate.
+
+```{r output}
+#Compute cross-correlation
+ccfdata <- ccf(pwx, newpwy, na.action = na.omit, plot = FALSE)
+plot(ccfdata, main = "GME Open Residuals vs. Reverse Repo Rate")
+```
+
+
