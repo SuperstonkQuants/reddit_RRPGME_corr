@@ -14,39 +14,42 @@ output:
   output: null
 ---
 
+## Superstonk Quants Website: https://www.superstonkquant.org/
+
+## Link to the Github repo: https://github.com/SuperstonkQuants/reddit_RRPGME_corr
+
 ```{r setup, message=FALSE}
-#Calling Required Libraries
+# Call Required Packages
 library(tidyquant)
 library(sqldf)
 library(dplyr)
 library(stringr)
 library(ggpubr)
 library(rmdformats)
+library(roll)
 ```
-
-## Guide with additional info that we'll be using: https://online.stat.psu.edu/stat510/lesson/9/9.1
 
 ## First, pull the GME OHLC and Reverse Repo data into R.
 
 ```{r data_import}
-#Pulling GME OHLC Data
+# Pulling GME OHLC Data using the Tidyquant package
 stock_data <- tq_get("GME",
                    get = "stock.prices",
                    from = "2020-01-01",
                    to = Sys.Date()
                    )
 
-#Loading RRP Data
+# Loading RRP Data
 rrp_data <- read.csv("~/RStudio/rrp_data.csv")
-#Cleaning up headers
+# Cleaning up headers
 names(rrp_data) <- str_replace_all(names(rrp_data), "[.]", "_")
 
 ```
 
-## Subset the Reverse Repo data down to just the records that have the actual Reverse Repo rates per day, then fix some field formats.
+## Subset the Reverse Repo data down to just the records that have the actual Reverse Repo Totals per day, then fix some field formats.
 
 ```{r data_cleaning, warning=FALSE}
-#Subsetting RRP Data to the useful features
+# Subsetting RRP Data to the useful features
 rrp_data_sub <- sqldf(
 "
 select
@@ -59,7 +62,7 @@ where Op_Type = 'RRP'
 "
 )
 
-#Fixing formatting
+# Fixing formatting
 rrp_data_sub$Deal_Date <- as.Date(rrp_data_sub$Deal_Date, "%m/%d/%Y")
 rrp_data_sub$Participating_Counterparties <- as.integer(rrp_data_sub$Participating_Counterparties)
 
@@ -68,7 +71,7 @@ rrp_data_sub$Participating_Counterparties <- as.integer(rrp_data_sub$Participati
 ## Join the 2 sets of data together by date.
 
 ```{r data_joining}
-#Joining the GME OHLC data to the RRP Data
+# Joining the GME OHLC data to the RRP Data
 joined_data <- sqldf(
 "
 select *
@@ -83,47 +86,28 @@ where s.symbol is not null
 
 ```
 
-## Run a Shapiro-Wilk test for normality to determine if the series is normally distributed.
-
-## Then, run a density chart and QQ Plot to see what the distributions look like visually.
-
-```{r tests}
-#Shapiro-Wilk normality test for RRP Total
-shapiro.test(joined_data$Total_Accept)
-#Shapiro-Wilk normality test for GME open
-shapiro.test(joined_data$open)
-
-#RRP Total Density Plot
-ggdensity(joined_data$Total_Accept, xlab = "Reverse Repo Rate")
-#GME open Density Plot
-ggdensity(joined_data$open, xlab = "GME open")
-
-#RRP Total QQ Plot
-ggqqplot(joined_data$Total_Accept, ylab = "Reverse Repo Rate")
-#GME open QQ Plot
-ggqqplot(joined_data$open, ylab = "GME open")
-```
-
-## Create a scatter plot for the Reverse Repo Rate against GME Open.
+## Create a scatter plot for the RRP Daily Total against GME Open.
 
 ```{r scatter, message=FALSE}
-#Scatter plot for RRP Total and GME Open
+# Scatter plot for RRP Total and GME Open
 ggscatter(joined_data, x = "open", y = "Total_Accept", 
           add = "reg.line", conf.int = TRUE, 
-          xlab = "GME Open", ylab = "RRP Total")
+          xlab = "GME Open", ylab = "RRP Daily Total")
 ```
 
-## Use an ARIMA model on the GME Open values to determine if there is any lag of GME Price that can predict the Reverse Repo rate.
+Based on the plot, there does not appear to be a linear relationship between GME's Open price and the RRP Daily Total. If there were a linear relationship between the values, the points would fall around the line in the middle.
+
+## Use an ARIMA model on the GME Open values to determine if there is any reasonable lag of GME Price that can predict the Reverse Repo rate.
 
 ```{r arima}
-#Choose which features to compare
+# Choose which features to compare
 x <- joined_data$open
 y <- joined_data$Total_Accept
 
-#Fit ARIMA model. Note: fit doesn't actually matter much here, just removing autoregression
+# Fit ARIMA model. Note: fit doesn't actually matter much here, just removing autoregression
 ar1model = arima(x, order = c(1,1,0))
 
-#Use residuals from ARIMA model fit on x to filter y
+# Use residuals from ARIMA model fit on x to filter y
 pwx = ar1model$residuals
 
 newpwy = stats::filter(y,
@@ -133,10 +117,111 @@ newpwy = stats::filter(y,
 
 ## Plot the Cross-Correlation between the GME Price residuals and the Reverse Repo rate.
 
-```{r output}
-#Compute cross-correlation
+```{r ccf_output}
+# Compute cross-correlation and plot the output
 ccfdata <- ccf(pwx, newpwy, na.action = na.omit, plot = FALSE)
-plot(ccfdata, main = "GME Open Residuals vs. Reverse Repo Rate")
+plot(ccfdata, main = "GME Open Residuals vs. Reverse Repo Totals")
 ```
 
+Since none of the vertical lines crossed the blue dotted lines, we can assume initially that these 2 variables are not correlated with each other.
+
+## Using Differenced variables, calculate the 60-day Rolling Correlation between GME Open and RRP Totals
+
+```{r differenced_totals}
+# Calculate the 1-day Differences for each variable
+xd = diff(joined_data$open, 1)
+yd = diff(joined_data$Total_Accept, 1)
+
+# Calculate the 60-Day Rolling Correlation between the 2 variables' differences
+x_y_roll_cor <- roll_cor(xd, yd, width = 60)
+
+# Create a plot showing what the 60-Day Rolling Correlation looks like over time
+plot(x_y_roll_cor,
+     ylim = c(-1,1),
+     pch = 16,
+     xlab = 'Days since Jan 1st 2020',
+     ylab = '60 Day Rolling Correlation Coefficient',
+     main = '60 Day Rolling Correlation Comparison between GME and RRP'
+     )
+abline(h=0, col = "blue", lty = 2)
+abline(h=1, col = "red", lwd = 2)
+abline(h=-1, col = "red", lwd = 2)
+abline(h=0.5, col = "grey", lty = 3)
+abline(h=-0.5, col = "grey", lty = 3)
+abline(v=270, col = "grey", lty = 2)
+```
+
+This plot outlines the degree at which the two Differenced variables are related to each other, using a 60-day rolling window over time. The closer to the red lines at 1 and -1, the stronger the relationship between the variables, either positive or negative. The closer to the blue center line, the weaker the relationship. The vertical dotted line corresponds with the January 27th run-up.
+
+Since the points are between 0.5 and -0.5, mostly along the center line at 0, we can assume that the GME Open price and the RRP Daily Totals are not correlated with each other
+
+
+## Using Differenced variables, calculate the 60-day Rolling Correlation between GME Open and Participating Counterparties
+
+```{r differenced_counterparties}
+# Calculate the 1-day Differences for each variable
+xd = diff(joined_data$open, 1)
+yd = diff(joined_data$Participating_Counterparties, 1)
+
+# Calculate the 60-Day Rolling Correlation between the 2 variables' differences
+x_y_roll_cor <- roll_cor(xd, yd, width = 60)
+
+# Create a plot showing what the 60-Day Rolling Correlation looks like over time
+plot(x_y_roll_cor,
+     ylim = c(-1,1),
+     pch = 16,
+     xlab = 'Days since Jan 1st 2020',
+     ylab = '60 Day Rolling Correlation Coefficient',
+     main = '60 Day Rolling Correlation Comparison between \nGME and Participating Counterparties'
+     )
+abline(h=0, col = "blue", lty = 2)
+abline(h=1, col = "red", lwd = 2)
+abline(h=-1, col = "red", lwd = 2)
+abline(h=0.5, col = "grey", lty = 3)
+abline(h=-0.5, col = "grey", lty = 3)
+abline(v=270, col = "grey", lty = 2)
+```
+
+## Using Differenced variables, calculate the 60-day Rolling Correlation between GME Open and Amount per Counterparty
+
+```{r differenced_amount_per_party}
+# Add a feature for RRP Amount per Participating Counterparty
+joined_data2 <- joined_data %>%
+    mutate(amount_per_party = (Total_Accept/Participating_Counterparties)) %>%
+    mutate(amount_per_party = replace(amount_per_party, is.na(amount_per_party), 0))
+
+# Calculate the 1-day Differences for each variable
+xd = diff(joined_data2$open, 1)
+yd = diff(joined_data2$amount_per_party, 1)
+
+# Calculate the 60-Day Rolling Correlation between the 2 variables' differences
+x_y_roll_cor <- roll_cor(xd, yd, width = 60)
+
+# Create a plot showing what the 60-Day Rolling Correlation looks like over time
+plot(x_y_roll_cor,
+     ylim = c(-1,1),
+     pch = 16,
+     xlab = 'Days since Jan 1st 2020',
+     ylab = '60 Day Rolling Correlation Coefficient',
+     main = '60 Day Rolling Correlation Comparison between \nGME and Amount per Counterparty'
+     )
+abline(h=0, col = "blue", lty = 2)
+abline(h=1, col = "red", lwd = 2)
+abline(h=-1, col = "red", lwd = 2)
+abline(h=0.5, col = "grey", lty = 3)
+abline(h=-0.5, col = "grey", lty = 3)
+abline(v=270, col = "grey", lty = 2)
+```
+
+```{r export, include=FALSE}
+# Join the Correlation Coefficient against the original data
+# roll_corr_values <- as.data.frame(x_y_roll_cor) %>%
+#   add_row(x_y_roll_cor = NA, .before = 1)
+
+# bound_corr <- cbind(joined_data, roll_corr_values)
+# colnames(bound_corr)[12] <- "rolling_corr"
+
+# Write the data to a csv
+# write.csv(bound_corr, "~/RStudio/Rolling_Correlation_values.csv")
+```
 
